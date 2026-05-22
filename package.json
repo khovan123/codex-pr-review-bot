@@ -3,9 +3,11 @@
   "version": "0.1.0",
   "description": "BYOK GitHub Action that posts Codex-style pull request reviews using each user's OpenAI API key.",
   "type": "module",
-  "main": "src/main.js",
+  "main": "dist/main.js",
   "scripts": {
-    "check": "node --check src/main.js"
+    "build": "tsc",
+    "check": "tsc --noEmit && node --check dist/main.js",
+    "prepare": "npm run build"
   },
   "keywords": [
     "github-action",
@@ -15,8 +17,11 @@
     "codex"
   ],
   "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.19.25",
+    "typescript": "^5.9.3"
+  },
   "engines": {
     "node": ">=20"
   }
 }
-
