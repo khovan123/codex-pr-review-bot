@@ -3,7 +3,58 @@ import { readFileSync } from "node:fs";
 const OPENAI_API_URL = "https://api.openai.com/v1/responses";
 const GITHUB_API_URL = process.env.GITHUB_API_URL || "https://api.github.com";
 
-function getInput(name, options = {}) {
+type GetInputOptions = {
+  required?: boolean;
+};
+
+type PullRequestEvent = {
+  repository: {
+    full_name: string;
+  };
+  pull_request?: {
+    number: number;
+    title: string;
+    user?: {
+      login?: string;
+    };
+    base?: {
+      ref?: string;
+    };
+    head?: {
+      ref?: string;
+    };
+  };
+};
+
+type PullRequestFile = {
+  filename: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch?: string;
+};
+
+type GitHubErrorBody = {
+  message?: string;
+};
+
+type OpenAIResponse = {
+  output_text?: string;
+  output?: Array<{
+    content?: Array<{
+      type?: string;
+      text?: string;
+    }>;
+  }>;
+};
+
+type OpenAIErrorBody = {
+  error?: {
+    message?: string;
+  };
+};
+
+function getInput(name: string, options: GetInputOptions = {}): string {
   const envName = `INPUT_${name.replace(/ /g, "_").toUpperCase()}`;
   const value = process.env[envName]?.trim() || "";
   if (options.required && !value) {
@@ -12,12 +63,12 @@ function getInput(name, options = {}) {
   return value;
 }
 
-function parsePositiveInteger(value, fallback) {
+function parsePositiveInteger(value: string, fallback: number): number {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function requireEnv(name) {
+function requireEnv(name: string): string {
   const value = process.env[name];
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`);
@@ -25,16 +76,16 @@ function requireEnv(name) {
   return value;
 }
 
-function readEvent() {
+function readEvent(): PullRequestEvent {
   const eventPath = requireEnv("GITHUB_EVENT_PATH");
-  const event = JSON.parse(readFileSync(eventPath, "utf8"));
+  const event = JSON.parse(readFileSync(eventPath, "utf8")) as PullRequestEvent;
   if (!event.pull_request?.number) {
     throw new Error("Codex PR Review Bot only runs on pull_request events.");
   }
   return event;
 }
 
-async function githubRequest(path, token, options = {}) {
+async function githubRequest<T>(path: string, token: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${GITHUB_API_URL}${path}`, {
     ...options,
     headers: {
@@ -47,19 +98,31 @@ async function githubRequest(path, token, options = {}) {
   });
 
   const bodyText = await response.text();
-  const body = bodyText ? JSON.parse(bodyText) : null;
+  const body = bodyText ? JSON.parse(bodyText) as GitHubErrorBody : null;
   if (!response.ok) {
     throw new Error(`GitHub API ${response.status}: ${body?.message || bodyText}`);
   }
-  return body;
+  return body as T;
 }
 
-async function fetchPullRequestFiles({ owner, repo, pullNumber, token, maxFiles }) {
-  const files = [];
+async function fetchPullRequestFiles({
+  owner,
+  repo,
+  pullNumber,
+  token,
+  maxFiles
+}: {
+  owner: string;
+  repo: string;
+  pullNumber: number;
+  token: string;
+  maxFiles: number;
+}): Promise<PullRequestFile[]> {
+  const files: PullRequestFile[] = [];
   let page = 1;
 
   while (files.length < maxFiles) {
-    const batch = await githubRequest(
+    const batch = await githubRequest<PullRequestFile[]>(
       `/repos/${owner}/${repo}/pulls/${pullNumber}/files?per_page=100&page=${page}`,
       token
     );
@@ -71,8 +134,8 @@ async function fetchPullRequestFiles({ owner, repo, pullNumber, token, maxFiles 
   return files.slice(0, maxFiles);
 }
 
-function formatPatch(files, maxPatchChars) {
-  const chunks = [];
+function formatPatch(files: PullRequestFile[], maxPatchChars: number): string {
+  const chunks: string[] = [];
   let totalChars = 0;
 
   for (const file of files) {
@@ -100,12 +163,12 @@ function formatPatch(files, maxPatchChars) {
   return chunks.join("\n\n---\n\n");
 }
 
-function extractOutputText(response) {
+function extractOutputText(response: OpenAIResponse): string {
   if (typeof response.output_text === "string" && response.output_text.trim()) {
     return response.output_text.trim();
   }
 
-  const text = [];
+  const text: string[] = [];
   for (const item of response.output || []) {
     for (const content of item.content || []) {
       if (content.type === "output_text" && content.text) {
@@ -116,7 +179,19 @@ function extractOutputText(response) {
   return text.join("\n").trim();
 }
 
-async function createReview({ openaiApiKey, model, event, files, maxPatchChars }) {
+async function createReview({
+  openaiApiKey,
+  model,
+  event,
+  files,
+  maxPatchChars
+}: {
+  openaiApiKey: string;
+  model: string;
+  event: PullRequestEvent & { pull_request: NonNullable<PullRequestEvent["pull_request"]> };
+  files: PullRequestFile[];
+  maxPatchChars: number;
+}): Promise<string> {
   const patch = formatPatch(files, maxPatchChars);
   const pullRequest = event.pull_request;
 
@@ -151,9 +226,12 @@ async function createReview({ openaiApiKey, model, event, files, maxPatchChars }
   });
 
   const bodyText = await response.text();
-  const body = bodyText ? JSON.parse(bodyText) : null;
+  const body = bodyText ? JSON.parse(bodyText) as OpenAIResponse & OpenAIErrorBody : null;
   if (!response.ok) {
     throw new Error(`OpenAI API ${response.status}: ${body?.error?.message || bodyText}`);
+  }
+  if (!body) {
+    throw new Error("OpenAI returned an empty response body.");
   }
 
   const review = extractOutputText(body);
@@ -163,7 +241,19 @@ async function createReview({ openaiApiKey, model, event, files, maxPatchChars }
   return review;
 }
 
-async function postPullRequestReview({ owner, repo, pullNumber, token, body }) {
+async function postPullRequestReview({
+  owner,
+  repo,
+  pullNumber,
+  token,
+  body
+}: {
+  owner: string;
+  repo: string;
+  pullNumber: number;
+  token: string;
+  body: string;
+}): Promise<unknown> {
   return githubRequest(`/repos/${owner}/${repo}/pulls/${pullNumber}/reviews`, token, {
     method: "POST",
     body: JSON.stringify({
@@ -173,20 +263,26 @@ async function postPullRequestReview({ owner, repo, pullNumber, token, body }) {
   });
 }
 
-async function main() {
+async function main(): Promise<void> {
   const openaiApiKey = getInput("openai_api_key", { required: true });
   const githubToken = getInput("github_token", { required: true });
   const model = getInput("model") || "gpt-5";
   const maxFiles = parsePositiveInteger(getInput("max_files"), 40);
   const maxPatchChars = parsePositiveInteger(getInput("max_patch_chars"), 60000);
   const event = readEvent();
+  const pullRequest = event.pull_request;
+  if (!pullRequest) {
+    throw new Error("Codex PR Review Bot only runs on pull_request events.");
+  }
   const [owner, repo] = event.repository.full_name.split("/");
-  const pullNumber = event.pull_request.number;
+  if (!owner || !repo) {
+    throw new Error(`Invalid repository full name: ${event.repository.full_name}`);
+  }
 
   const files = await fetchPullRequestFiles({
     owner,
     repo,
-    pullNumber,
+    pullNumber: pullRequest.number,
     token: githubToken,
     maxFiles
   });
@@ -194,7 +290,7 @@ async function main() {
   const review = await createReview({
     openaiApiKey,
     model,
-    event,
+    event: { ...event, pull_request: pullRequest },
     files,
     maxPatchChars
   });
@@ -207,11 +303,11 @@ async function main() {
     "<sub>Generated by Codex PR Review Bot using this repository's configured OpenAI API key.</sub>"
   ].join("\n");
 
-  await postPullRequestReview({ owner, repo, pullNumber, token: githubToken, body });
-  console.log(`Posted Codex review for ${event.repository.full_name}#${pullNumber}`);
+  await postPullRequestReview({ owner, repo, pullNumber: pullRequest.number, token: githubToken, body });
+  console.log(`Posted Codex review for ${event.repository.full_name}#${pullRequest.number}`);
 }
 
-main().catch((error) => {
-  console.error(error.message);
+main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
 });
