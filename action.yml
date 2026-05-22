@@ -1,0 +1,31 @@
+name: Codex PR Review Bot
+description: Posts a Codex-style pull request review using the repository owner's OpenAI API key.
+author: khovan123
+
+branding:
+  icon: git-pull-request
+  color: green
+
+inputs:
+  openai_api_key:
+    description: OpenAI API key supplied by the repository user, usually from secrets.OPENAI_API_KEY.
+    required: true
+  github_token:
+    description: GitHub token used to read pull request files and post the review.
+    required: true
+  model:
+    description: OpenAI model used for the review.
+    required: false
+    default: gpt-5
+  max_files:
+    description: Maximum number of changed files to include in the review prompt.
+    required: false
+    default: "40"
+  max_patch_chars:
+    description: Maximum patch characters sent to OpenAI.
+    required: false
+    default: "60000"
+
+runs:
+  using: node20
+  main: src/main.js

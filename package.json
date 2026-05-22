@@ -1,0 +1,22 @@
+{
+  "name": "codex-pr-review-bot",
+  "version": "0.1.0",
+  "description": "BYOK GitHub Action that posts Codex-style pull request reviews using each user's OpenAI API key.",
+  "type": "module",
+  "main": "src/main.js",
+  "scripts": {
+    "check": "node --check src/main.js"
+  },
+  "keywords": [
+    "github-action",
+    "pull-request",
+    "code-review",
+    "openai",
+    "codex"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}
+
